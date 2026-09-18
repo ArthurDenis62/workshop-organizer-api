@@ -1,17 +1,51 @@
+name: workshop-organizer
+
 services:
 
-  app:
-    image: workshop-organizer
-    ports:
-      - "8080:8080"
-    environment:
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://db:5432/workshopsdb"
-      SPRING_DATASOURCE_USERNAME: workshops_user
-      SPRING_DATASOURCE_PASSWORD: oc2024
-
   db:
-    image: postgres:13
+    image: postgres:13-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: workshops_user
-      POSTGRES_PASSWORD: oc2024
-      POSTGRES_DB: workshopsdb
+      POSTGRES_DB: ${POSTGRES_DB:-workshopsdb}
+      POSTGRES_USER: ${POSTGRES_USER:-workshops_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oc2024}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Schéma + données initiales, joués uniquement si le volume est vide
+      - ./db/00001_0.0.0_init_create.sql:/sql/00001_0.0.0_init_create.sql:ro
+      - ./db/docker-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  app:
+    build: .
+    image: ${APP_IMAGE:-workshop-organizer:local}
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-workshopsdb}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-workshops_user}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-oc2024}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging: *default-logging
+
+volumes:
+  pgdata:

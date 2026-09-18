@@ -1,0 +1,29 @@
+# Artefacts de build et caches locaux
+build/
+.gradle/
+bin/
+out/
+src/main/java-generated/
+.openapi-generator/
+
+# Résultats de tests
+test-results/
+
+# Git, IDE, CI
+.git
+.github
+.gitignore
+.idea
+.vscode
+*.iml
+
+# Fichiers non nécessaires à l'image
+docker-compose*.yml
+Dockerfile
+.dockerignore
+.env
+.env.*
+k8s/
+db/
+*.md
+run-tests.sh

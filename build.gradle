@@ -5,6 +5,7 @@ plugins {
 	id 'java'
 	id 'maven-publish'
 	id 'war'
+	id 'jacoco'
 }
 
 group = 'fr.oc.devops'
@@ -33,6 +34,9 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 
 	runtimeOnly 'org.postgresql:postgresql:42.7.3'
 
@@ -68,6 +72,21 @@ test {
 	useJUnitPlatform()
 	testLogging {
 		events "passed", "skipped", "failed"
+	}
+	finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+	dependsOn test
+	reports {
+		xml.required = true
+		html.required = true
+	}
+	// Generated OpenAPI code is not written by the team: exclude it from coverage
+	afterEvaluate {
+		classDirectories.setFrom(files(classDirectories.files.collect {
+			fileTree(dir: it, exclude: ['fr/oc/devops/backend/*Api.class', 'fr/oc/devops/backend/*ApiController.class', 'fr/oc/devops/backend/ApiUtil.class', 'fr/oc/devops/backend/models/New*.class', 'fr/oc/devops/backend/models/Notion.class', 'fr/oc/devops/backend/models/Workshop.class', 'fr/oc/devops/backend/models/Error.class'])
+		}))
 	}
 }
 

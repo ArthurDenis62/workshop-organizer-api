@@ -39,3 +39,7 @@ out/
 ### OpenAPI Generator ###
 .openapi-generator/
 java-generated/
+### Docker / CI ###
+.env
+test-results/
+backups/
