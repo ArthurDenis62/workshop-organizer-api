@@ -138,7 +138,7 @@ Codes de sortie : `0` succès, `1` tests en échec, `2` environnement invalide, 
 Le workflow `.github/workflows/ci.yml` est générique (même fichier pour le front-end Angular) :
 
 1. **detect** : type de projet via `./run-tests.sh --detect`
-2. **test** : `./run-tests.sh`, rapport JUnit publié dans l'onglet *Checks*, résultats archivés en artefact
+2. **test** : `./run-tests.sh`, rapport JUnit publié dans le résumé du run (*Summary*), résultats archivés en artefact
 3. **build** : image Docker construite, validée par un smoke test `docker compose up --wait` (API + PostgreSQL),
    puis poussée sur `ghcr.io/<owner>/<repo>` avec les tags `<branche>`, `<branche>-<sha>`, `sha-<sha>` (+ `latest` sur `main`)
 4. **release** (branche `main`) : [semantic-release](https://semantic-release.gitbook.io/) calcule la version à partir
