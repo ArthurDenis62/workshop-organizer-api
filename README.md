@@ -94,3 +94,52 @@ To publish your application to a GitLab registry, follow these steps:
    Remember to replace placeholders with actual values specific to your project.
 
 Feel free to enhance this README with additional details, such as API endpoints, security considerations, and deployment instructions. Happy organizing! 🚀
+
+---
+
+## Industrialisation : Docker & CI/CD
+
+### Lancer l'application avec Docker
+
+Prérequis : Docker 24+ et Docker Compose v2.
+
+```bash
+cp .env.example .env   # puis adapter les identifiants (facultatif en local)
+docker compose up -d --build
+```
+
+- API : http://localhost:8080/api/workshops, http://localhost:8080/api/notions
+- Documentation OpenAPI (Swagger UI) : http://localhost:8080/
+- Santé : http://localhost:8080/actuator/health, métriques : `/actuator/metrics`, `/actuator/prometheus`
+
+| Fichier | Rôle |
+|---|---|
+| `Dockerfile` | Build multi-stage : `eclipse-temurin:21-jdk` compile avec Gradle (`bootJar`), `eclipse-temurin:21-jre-alpine` exécute le JAR (utilisateur non-root) |
+| `.dockerignore` | Exclut `build/`, `.gradle/`, sources générées, fichiers Git/IDE du contexte de build |
+| `docker-compose.yml` | Services `db` (PostgreSQL 13, volume `pgdata`, healthcheck `pg_isready`) et `app` (démarre quand la base est *healthy*) |
+| `db/docker-init/01-init-db.sh` | Rejoue `db/00001_0.0.0_init_create.sql` au premier démarrage de PostgreSQL (volume vide) |
+| `.env.example` | Variables de configuration (base, port, image) |
+
+Variables d'environnement de l'application : `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`,
+`SPRING_DATASOURCE_PASSWORD` (renseignées par `docker-compose.yml` à partir de `.env`).
+
+### Exécuter les tests
+
+```bash
+./run-tests.sh
+```
+
+Le script détecte le type de projet, vérifie les prérequis (JDK 21+), exécute `./gradlew cleanTest test` et place les
+rapports JUnit XML dans `test-results/` (couverture JaCoCo dans `test-results/coverage/`).
+Codes de sortie : `0` succès, `1` tests en échec, `2` environnement invalide, `3` aucun rapport produit.
+
+### Pipeline CI/CD (GitHub Actions)
+
+Le workflow `.github/workflows/ci.yml` est générique (même fichier pour le front-end Angular) :
+
+1. **detect** : type de projet via `./run-tests.sh --detect`
+2. **test** : `./run-tests.sh`, rapport JUnit publié dans l'onglet *Checks*, résultats archivés en artefact
+3. **build** : image Docker construite, validée par un smoke test `docker compose up --wait` (API + PostgreSQL),
+   puis poussée sur `ghcr.io/<owner>/<repo>` avec les tags `<branche>`, `<branche>-<sha>`, `sha-<sha>` (+ `latest` sur `main`)
+4. **release** (branche `main`) : [semantic-release](https://semantic-release.gitbook.io/) calcule la version à partir
+   des commits conventionnels, crée le tag Git et la GitHub Release, puis ajoute les tags `X.Y.Z` et `X.Y` à l'image.
