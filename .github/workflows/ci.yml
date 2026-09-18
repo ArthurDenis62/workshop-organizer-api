@@ -1,0 +1,241 @@
+# =====================================================================
+# Pipeline CI/CD générique - identique pour l'application Angular et
+# l'application Spring Boot (Gradle).
+#
+#   detect  -> détermine le type de projet (./run-tests.sh --detect)
+#   test    -> exécute ./run-tests.sh et publie le rapport JUnit
+#   build   -> construit l'image Docker, la valide (smoke test compose)
+#              puis la pousse sur GHCR (tags : branche, branche-sha, sha)
+#   release -> sur la branche principale, crée une version sémantique
+#              (tag Git + GitHub Release) et tague l'image avec la version
+#
+# Seules les variables du bloc "env" sont à adapter pour un autre projet.
+# Le workflow peut aussi être appelé depuis un autre dépôt (workflow_call).
+# =====================================================================
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]   # tags créés par semantic-release
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  JAVA_VERSION: "21"
+  JAVA_DISTRIBUTION: temurin
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+
+jobs:
+
+  detect:
+    name: Détection du projet
+    runs-on: ubuntu-latest
+    outputs:
+      type: ${{ steps.detect.outputs.type }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Détecter le type de projet
+        id: detect
+        run: |
+          chmod +x run-tests.sh
+          type="$(./run-tests.sh --detect)"
+          echo "Type de projet : ${type}"
+          echo "type=${type}" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Tests (${{ needs.detect.outputs.type }})
+    needs: detect
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write        # publication du rapport de tests
+    steps:
+      - uses: actions/checkout@v5
+
+      # --- Outillage installé selon le type de projet (avec cache des dépendances)
+      - name: Installer Node.js
+        if: needs.detect.outputs.type == 'angular'
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Installer les dépendances npm
+        if: needs.detect.outputs.type == 'angular'
+        run: npm ci --no-audit --no-fund
+
+      - name: Installer le JDK
+        if: needs.detect.outputs.type == 'gradle' || needs.detect.outputs.type == 'maven'
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: ${{ needs.detect.outputs.type }}
+
+      # --- Exécution unifiée des tests
+      - name: Exécuter les tests
+        run: ./run-tests.sh
+
+      - name: Publier le rapport de tests
+        if: ${{ !cancelled() && hashFiles('test-results/*.xml') != '' }}
+        uses: dorny/test-reporter@v2
+        with:
+          name: Rapport de tests (${{ needs.detect.outputs.type }})
+          path: test-results/*.xml
+          reporter: java-junit
+          fail-on-error: false   # l'échec est déjà porté par l'étape précédente
+
+      - name: Archiver les résultats de tests
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ needs.detect.outputs.type }}
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: warn
+
+  build:
+    name: Build & publication de l'image
+    needs: [detect, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push sur GitHub Container Registry
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Nom de l'image (minuscules requises par GHCR)
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Calcul des tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' }}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build de l'image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ github.repository }}
+          cache-to: type=gha,mode=max,scope=${{ github.repository }}
+
+      # Validation fonctionnelle : l'image est démarrée avec le docker-compose.yml
+      # du projet et doit devenir "healthy" (healthchecks Docker).
+      - name: Smoke test (docker compose)
+        env:
+          APP_IMAGE: ${{ steps.image.outputs.name }}:${{ steps.meta.outputs.version }}
+        run: |
+          docker compose up -d --no-build --wait --wait-timeout 180
+          docker compose ps
+
+      - name: Logs en cas d'échec du smoke test
+        if: failure()
+        run: docker compose logs
+
+      - name: Arrêt de l'environnement de test
+        if: always()
+        run: docker compose down -v
+
+      - name: Connexion à GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publication de l'image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ github.repository }}
+
+      - name: Résumé
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Image publiée"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Version sémantique
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # tag Git + GitHub Release
+      issues: write
+      pull-requests: write
+      packages: write      # ajout du tag de version sur l'image
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0     # historique complet pour analyser les commits
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: semantic-release
+        id: semrel
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Connexion à GHCR
+        if: steps.semrel.outputs.new_release_published == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pas de rebuild : l'image testée et publiée par le job build reçoit
+      # simplement les tags de version (X.Y.Z et X.Y)
+      - name: Tag de version sur l'image
+        if: steps.semrel.outputs.new_release_published == 'true'
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          VERSION: ${{ steps.semrel.outputs.new_release_version }}
+          MAJOR: ${{ steps.semrel.outputs.new_release_major_version }}
+          MINOR: ${{ steps.semrel.outputs.new_release_minor_version }}
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE}:${VERSION}" \
+            -t "${IMAGE}:${MAJOR}.${MINOR}" \
+            "${IMAGE}:${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
+          echo "### Version ${VERSION} publiée : \`${IMAGE}:${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
