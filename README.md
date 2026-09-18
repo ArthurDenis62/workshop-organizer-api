@@ -143,3 +143,12 @@ Le workflow `.github/workflows/ci.yml` est générique (même fichier pour le fr
    puis poussée sur `ghcr.io/<owner>/<repo>` avec les tags `<branche>`, `<branche>-<sha>`, `sha-<sha>` (+ `latest` sur `main`)
 4. **release** (branche `main`) : [semantic-release](https://semantic-release.gitbook.io/) calcule la version à partir
    des commits conventionnels, crée le tag Git et la GitHub Release, puis ajoute les tags `X.Y.Z` et `X.Y` à l'image.
+
+### Sauvegarde et restauration de la base
+
+```bash
+./scripts/backup-db.sh                                   # dump pg_dump + empreinte SHA-256 + archive de config dans backups/
+./scripts/restore-db.sh backups/workshopsdb_<date>.dump  # restauration (application arrêtée pendant l'opération)
+```
+
+Rétention par défaut : 7 jours (`RETENTION_DAYS`). Voir le dossier d'exploitation pour la stratégie complète.
