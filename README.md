@@ -148,6 +148,7 @@ Le workflow `.github/workflows/ci.yml` est générique (même fichier pour le fr
 
 ```bash
 ./scripts/backup-db.sh                                   # dump pg_dump + empreinte SHA-256 + archive de config dans backups/
+./scripts/backup-volume.sh                               # copie physique du volume, à froid (hebdomadaire)
 ./scripts/restore-db.sh backups/workshopsdb_<date>.dump  # restauration (application arrêtée pendant l'opération)
 ```
 
